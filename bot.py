@@ -101,7 +101,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/remind 2h متن — یادآوری\n"
         "/project نام پروژه — تغییر نام پروژه\n"
         "/help — راهنما",
-        parse_mode="Markdown",
+        ,
         reply_markup=menu()
     )
 
@@ -130,7 +130,7 @@ async def addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"به او بگو داخل همین گروه بنویسد:\n"
         f"`/joinrole {role}`\n\n"
         "این کار باعث می‌شود ربات User ID واقعی او را ثبت کند.",
-        parse_mode="Markdown"
+        
     )
 
 async def joinrole(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -160,7 +160,7 @@ async def members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for r in rows:
         tag = f"@{r['username']}" if r["username"] else r["name"]
         text += f"{ROLE_NAMES.get(r['role'], r['role'])} — {tag}\n"
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text, )
 
 async def addtask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw = " ".join(context.args).strip()
@@ -190,7 +190,7 @@ def tasks_text():
     return text
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(tasks_text(), parse_mode="Markdown")
+    await update.message.reply_text(tasks_text(), )
 
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or not context.args[0].isdigit():
@@ -218,7 +218,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"انجام‌شده: `{done_n}`\n"
         f"باقی‌مانده: `{total-done_n}`\n\n"
         f"مرحله فعلی: {("آماده‌سازی" if pct < 25 else "تولید" if pct < 60 else "پس‌تولید" if pct < 85 else "آماده انتشار")}",
-        parse_mode="Markdown"
+        
     )
 
 RELEASE_ITEMS = [
@@ -252,7 +252,7 @@ async def release(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎵 *YP — RELEASE CHECKLIST*\n\n" +
         "\n".join(lines) +
         f"\n\nProgress: `{pct}%`",
-        parse_mode="Markdown"
+        
     )
 
 def parse_duration(s):
@@ -290,7 +290,7 @@ async def reminder_worker(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(
                     r["chat_id"],
                     f"⏰ *YP Reminder*\n\n{r['text']}\n👤 برای: `{r['user_id']}`",
-                    parse_mode="Markdown"
+                    
                 )
                 db("UPDATE reminders SET sent=1 WHERE id=?", (r["id"],))
         except Exception:
@@ -313,7 +313,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     if q.data == "tasks":
-        await q.message.reply_text(tasks_text(), parse_mode="Markdown")
+        await q.message.reply_text(tasks_text(), )
     elif q.data == "status":
         await status(update, context)
     elif q.data == "release":
@@ -327,7 +327,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for r in rows
             ) if rows else "هنوز عضوی ثبت نشده."
         )
-        await q.message.reply_text(text, parse_mode="Markdown")
+        await q.message.reply_text(text, )
 
 async def error_handler(update, context):
     logging.exception("Unhandled error", exc_info=context.error)
