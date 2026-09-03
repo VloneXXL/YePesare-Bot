@@ -8,11 +8,11 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, ContextTypes
 )
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 DB_PATH = os.getenv("DB_PATH", "yp_team.db")
 
 if not TOKEN:
-    raise RuntimeError("BOT_TOKEN environment variable is missing.")
+    raise RuntimeError("BOT_TOKEN or TELEGRAM_TOKEN environment variable is missing.")
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -206,12 +206,13 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    reply_target = update.message or (update.callback_query.message if update.callback_query else None)
     s = db("SELECT project FROM settings WHERE chat_id=?", (chat_id,), fetch=True)
     project = s[0]["project"] if s else "YE PESARE — FIRST RELEASE"
     total = db("SELECT COUNT(*) c FROM tasks", fetch=True)[0]["c"]
     done_n = db("SELECT COUNT(*) c FROM tasks WHERE done=1", fetch=True)[0]["c"]
     pct = round(done_n / total * 100) if total else 0
-    await update.message.reply_text(
+    await reply_target.reply_text(
         f"📊 *{project}*\n\n"
         f"پیشرفت وظایف: `{pct}%`\n"
         f"انجام‌شده: `{done_n}`\n"
@@ -238,6 +239,7 @@ RELEASE_ITEMS = [
 ]
 
 async def release(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reply_target = update.message or (update.callback_query.message if update.callback_query else None)
     done_titles = {r["title"].lower() for r in db("SELECT title FROM tasks WHERE done=1", fetch=True)}
     lines = []
     checked = 0
@@ -246,7 +248,7 @@ async def release(update: Update, context: ContextTypes.DEFAULT_TYPE):
         checked += int(ok)
         lines.append(f"{'✅' if ok else '⬜'} {i}. {item}")
     pct = round(checked / len(RELEASE_ITEMS) * 100)
-    await update.message.reply_text(
+    await reply_target.reply_text(
         "🎵 *YP — RELEASE CHECKLIST*\n\n" +
         "\n".join(lines) +
         f"\n\nProgress: `{pct}%`",
