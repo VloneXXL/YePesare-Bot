@@ -2,11 +2,10 @@ import os
 import sqlite3
 import logging
 from datetime import datetime, timedelta, timezone
+from html import escape
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, ContextTypes
-)
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 DB_PATH = os.getenv("DB_PATH", "yp_team.db")
@@ -16,7 +15,7 @@ if not TOKEN:
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
 )
 
 ROLE_NAMES = {
@@ -26,16 +25,22 @@ ROLE_NAMES = {
     "designer": "🎨 Designer",
 }
 
+RELEASE_ITEMS = [
+    "Beat نهایی", "Lyrics نهایی", "Recording نهایی", "Mix", "Master",
+    "Cover", "Teaser / Content", "Metadata", "Distributor", "Spotify",
+    "SoundCloud", "YouTube", "TikTok", "Release Day Plan",
+]
+
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 conn.row_factory = sqlite3.Row
+
 
 def db(sql, params=(), fetch=False):
     cur = conn.cursor()
     cur.execute(sql, params)
     conn.commit()
-    if fetch:
-        return cur.fetchall()
-    return []
+    return cur.fetchall() if fetch else []
+
 
 def init_db():
     db("""CREATE TABLE IF NOT EXISTS members(
@@ -65,48 +70,65 @@ def init_db():
         project TEXT DEFAULT 'YE PESARE — FIRST RELEASE'
     )""")
 
-def is_admin(update: Update):
-    return update.effective_user and (
-        update.effective_user.id == update.effective_chat.owner_id
-        if getattr(update.effective_chat, "owner_id", None) else False
-    )
 
-async def ensure_admin(update):
+async def ensure_admin(update: Update):
+    if not update.effective_chat:
+        return False
     if update.effective_chat.type == "private":
         return True
     member = await update.effective_chat.get_member(update.effective_user.id)
     return member.status in ("administrator", "creator")
 
+
 def menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 وظایف", callback_data="tasks"),
-         InlineKeyboardButton("📊 وضعیت", callback_data="status")],
-        [InlineKeyboardButton("🎵 چک‌لیست ریلیز", callback_data="release"),
-         InlineKeyboardButton("👥 اعضا", callback_data="members")],
+        [
+            InlineKeyboardButton("📋 وظایف", callback_data="tasks"),
+            InlineKeyboardButton("📊 وضعیت", callback_data="status"),
+        ],
+        [
+            InlineKeyboardButton("🎵 چک‌لیست ریلیز", callback_data="release"),
+            InlineKeyboardButton("👥 اعضا", callback_data="members"),
+        ],
     ])
 
+
+def back_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 منوی اصلی", callback_data="menu")]
+    ])
+
+
+async def send_html(target, text, reply_markup=None):
+    await target.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 *YP Team Manager Bot*\n\n"
+    text = (
+        "<b>🤖 YP Team Manager Bot</b>\n\n"
         "ربات مدیریت تیم YP برای Ye Pesare آماده است.\n\n"
-        "دستورهای اصلی:\n"
-        "/addmember @user role — اضافه کردن عضو\n"
+        "<b>دستورهای اصلی:</b>\n"
+        "/addmember @user role — راهنمای اضافه کردن عضو\n"
+        "/joinrole role — ثبت نقش خودت\n"
         "/members — اعضای تیم\n"
         "/addtask عنوان | role — ساخت وظیفه\n"
-        "/tasks — نمایش وظایف\n"
+        "/tasks — نمایش وظایف باز\n"
         "/done ID — انجام‌شده کردن وظیفه\n"
         "/status — وضعیت پروژه\n"
         "/release — چک‌لیست ریلیز\n"
         "/remind 30m متن — یادآوری\n"
         "/remind 2h متن — یادآوری\n"
+        "/remind 1d متن — یادآوری\n"
         "/project نام پروژه — تغییر نام پروژه\n"
-        "/help — راهنما",
-        ,
-        reply_markup=menu()
+        "/help — راهنما"
     )
+    if update.message:
+        await send_html(update.message, text, menu())
+
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
+
 
 async def addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_admin(update):
@@ -123,15 +145,13 @@ async def addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if role not in ROLE_NAMES:
         await update.message.reply_text("❌ نقش نامعتبر است.")
         return
-    # Telegram Bot API cannot reliably resolve a username to a user_id.
-    # The target member should use /joinrole role themselves.
     await update.message.reply_text(
         f"برای @{username}:\n"
-        f"به او بگو داخل همین گروه بنویسد:\n"
-        f"`/joinrole {role}`\n\n"
-        "این کار باعث می‌شود ربات User ID واقعی او را ثبت کند.",
-        
+        f"داخل همین گروه بنویسد:\n"
+        f"/joinrole {role}\n\n"
+        "این کار User ID واقعی او را ثبت می‌کند."
     )
+
 
 async def joinrole(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or context.args[0].lower() not in ROLE_NAMES:
@@ -141,26 +161,30 @@ async def joinrole(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     role = context.args[0].lower()
-    u = update.effective_user
-    db("""INSERT INTO members(user_id, username, name, role)
-          VALUES(?,?,?,?)
-          ON CONFLICT(user_id) DO UPDATE SET
-          username=excluded.username, name=excluded.name, role=excluded.role""",
-       (u.id, u.username or "", u.full_name, role))
-    await update.message.reply_text(
-        f"✅ {u.full_name} به عنوان {ROLE_NAMES[role]} ثبت شد."
+    user = update.effective_user
+    db(
+        """INSERT INTO members(user_id, username, name, role)
+           VALUES(?,?,?,?)
+           ON CONFLICT(user_id) DO UPDATE SET
+           username=excluded.username, name=excluded.name, role=excluded.role""",
+        (user.id, user.username or "", user.full_name, role),
     )
+    await update.message.reply_text(
+        f"✅ {user.full_name} به عنوان {ROLE_NAMES[role]} ثبت شد."
+    )
+
 
 async def members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = db("SELECT * FROM members ORDER BY role, name", fetch=True)
     if not rows:
         await update.message.reply_text("هنوز عضوی ثبت نشده.")
         return
-    text = "👥 *اعضای YP*\n\n"
-    for r in rows:
-        tag = f"@{r['username']}" if r["username"] else r["name"]
-        text += f"{ROLE_NAMES.get(r['role'], r['role'])} — {tag}\n"
-    await update.message.reply_text(text, )
+    lines = ["<b>👥 اعضای YP</b>", ""]
+    for row in rows:
+        tag = f"@{escape(row['username'])}" if row["username"] else escape(row["name"])
+        lines.append(f"{ROLE_NAMES.get(row['role'], escape(row['role']))} — {tag}")
+    await send_html(update.message, "\n".join(lines), back_menu())
+
 
 async def addtask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw = " ".join(context.args).strip()
@@ -168,29 +192,44 @@ async def addtask(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "فرمت:\n/addtask عنوان وظیفه | role\n\n"
             "مثال:\n/addtask نوشتن Hook | artist\n"
-            "یا:\n/addtask انتخاب کاور | designer"
+            "/addtask انتخاب کاور | designer"
         )
         return
     title, role = [x.strip() for x in raw.split("|", 1)]
     role = role.lower()
+    if not title:
+        await update.message.reply_text("❌ عنوان وظیفه خالی است.")
+        return
     if role not in ROLE_NAMES and role not in ("all", "همه"):
         await update.message.reply_text("❌ نقش نامعتبر است.")
         return
-    db("INSERT INTO tasks(title, role, created_at) VALUES(?,?,?)",
-       (title, role, datetime.now(timezone.utc).isoformat()))
-    await update.message.reply_text(f"✅ وظیفه ساخته شد:\n{title}\n{ROLE_NAMES.get(role, '👥 همه')}")
+    db(
+        "INSERT INTO tasks(title, role, created_at) VALUES(?,?,?)",
+        (title, role, datetime.now(timezone.utc).isoformat()),
+    )
+    await update.message.reply_text(
+        f"✅ وظیفه ساخته شد:\n{title}\n{ROLE_NAMES.get(role, '👥 همه')}"
+    )
+
 
 def tasks_text():
     rows = db("SELECT * FROM tasks WHERE done=0 ORDER BY id", fetch=True)
     if not rows:
-        return "📋 *وظایف*\n\n🎉 همه وظایف انجام شده‌اند!"
-    text = "📋 *وظایف باز YP*\n\n"
-    for r in rows:
-        text += f"▫️ `#{r['id']}` {r['title']} — {ROLE_NAMES.get(r['role'], '👥 همه')}\n"
-    return text
+        return "<b>📋 وظایف باز YP</b>\n\n🎉 همه وظایف انجام شده‌اند!"
+    lines = ["<b>📋 وظایف باز YP</b>", ""]
+    for row in rows:
+        lines.append(
+            f"▫️ <code>#{row['id']}</code> {escape(row['title'])} — "
+            f"{ROLE_NAMES.get(row['role'], '👥 همه')}"
+        )
+    return "\n".join(lines)
+
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(tasks_text(), )
+    target = update.message or (update.callback_query.message if update.callback_query else None)
+    if target:
+        await send_html(target, tasks_text(), back_menu())
+
 
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or not context.args[0].isdigit():
@@ -201,136 +240,173 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rows:
         await update.message.reply_text("❌ چنین وظیفه‌ای وجود ندارد.")
         return
+    if rows[0]["done"]:
+        await update.message.reply_text("ℹ️ این وظیفه قبلاً انجام شده است.")
+        return
     db("UPDATE tasks SET done=1, assignee_id=? WHERE id=?", (update.effective_user.id, task_id))
     await update.message.reply_text(f"✅ وظیفه #{task_id} انجام شد.")
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    reply_target = update.message or (update.callback_query.message if update.callback_query else None)
-    s = db("SELECT project FROM settings WHERE chat_id=?", (chat_id,), fetch=True)
-    project = s[0]["project"] if s else "YE PESARE — FIRST RELEASE"
-    total = db("SELECT COUNT(*) c FROM tasks", fetch=True)[0]["c"]
-    done_n = db("SELECT COUNT(*) c FROM tasks WHERE done=1", fetch=True)[0]["c"]
-    pct = round(done_n / total * 100) if total else 0
-    await reply_target.reply_text(
-        f"📊 *{project}*\n\n"
-        f"پیشرفت وظایف: `{pct}%`\n"
-        f"انجام‌شده: `{done_n}`\n"
-        f"باقی‌مانده: `{total-done_n}`\n\n"
-        f"مرحله فعلی: {("آماده‌سازی" if pct < 25 else "تولید" if pct < 60 else "پس‌تولید" if pct < 85 else "آماده انتشار")}",
-        
-    )
 
-RELEASE_ITEMS = [
-    "Beat نهایی",
-    "Lyrics نهایی",
-    "Recording نهایی",
-    "Mix",
-    "Master",
-    "Cover",
-    "Teaser / Content",
-    "Metadata",
-    "Distributor",
-    "Spotify",
-    "SoundCloud",
-    "YouTube",
-    "TikTok",
-    "Release Day Plan",
-]
+def get_project(chat_id):
+    rows = db("SELECT project FROM settings WHERE chat_id=?", (chat_id,), fetch=True)
+    return rows[0]["project"] if rows else "YE PESARE — FIRST RELEASE"
+
+
+def get_stage(pct):
+    if pct < 25:
+        return "آماده‌سازی"
+    if pct < 60:
+        return "تولید"
+    if pct < 85:
+        return "پس‌تولید"
+    return "آماده انتشار"
+
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target = update.message or (update.callback_query.message if update.callback_query else None)
+    total = db("SELECT COUNT(*) AS c FROM tasks", fetch=True)[0]["c"]
+    done_n = db("SELECT COUNT(*) AS c FROM tasks WHERE done=1", fetch=True)[0]["c"]
+    pct = round(done_n / total * 100) if total else 0
+    project_name = escape(get_project(update.effective_chat.id))
+    stage = get_stage(pct)
+    text = (
+        f"<b>📊 {project_name}</b>\n\n"
+        f"پیشرفت وظایف: <code>{pct}%</code>\n"
+        f"انجام‌شده: <code>{done_n}</code>\n"
+        f"باقی‌مانده: <code>{total - done_n}</code>\n\n"
+        f"مرحله فعلی: <b>{stage}</b>"
+    )
+    if target:
+        await send_html(target, text, back_menu())
+
 
 async def release(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply_target = update.message or (update.callback_query.message if update.callback_query else None)
-    done_titles = {r["title"].lower() for r in db("SELECT title FROM tasks WHERE done=1", fetch=True)}
-    lines = []
+    target = update.message or (update.callback_query.message if update.callback_query else None)
+    done_titles = {
+        row["title"].lower()
+        for row in db("SELECT title FROM tasks WHERE done=1", fetch=True)
+    }
+    lines = ["<b>🎵 YP — RELEASE CHECKLIST</b>", ""]
     checked = 0
-    for i, item in enumerate(RELEASE_ITEMS, 1):
-        ok = any(item.lower() in x for x in done_titles)
+    for index, item in enumerate(RELEASE_ITEMS, 1):
+        ok = any(item.lower() in title for title in done_titles)
         checked += int(ok)
-        lines.append(f"{'✅' if ok else '⬜'} {i}. {item}")
+        lines.append(f"{'✅' if ok else '⬜'} {index}. {escape(item)}")
     pct = round(checked / len(RELEASE_ITEMS) * 100)
-    await reply_target.reply_text(
-        "🎵 *YP — RELEASE CHECKLIST*\n\n" +
-        "\n".join(lines) +
-        f"\n\nProgress: `{pct}%`",
-        
-    )
+    lines.extend(["", f"Progress: <code>{pct}%</code>"])
+    if target:
+        await send_html(target, "\n".join(lines), back_menu())
 
-def parse_duration(s):
-    s = s.strip().lower()
-    units = {"m": 60, "min": 60, "h": 3600, "d": 86400}
-    for u, mult in units.items():
-        if s.endswith(u):
-            return int(float(s[:-len(u)]) * mult)
+
+def parse_duration(value):
+    value = value.strip().lower()
+    units = {"min": 60, "m": 60, "h": 3600, "d": 86400}
+    for unit, multiplier in units.items():
+        if value.endswith(unit):
+            try:
+                amount = float(value[:-len(unit)])
+            except ValueError:
+                return None
+            return int(amount * multiplier) if amount > 0 else None
     return None
+
 
 async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("فرمت: /remind 30m متن یادآوری")
+        await update.message.reply_text(
+            "فرمت:\n/remind 30m متن یادآوری\n"
+            "/remind 2h متن یادآوری\n/remind 1d متن یادآوری"
+        )
         return
     seconds = parse_duration(context.args[0])
     if seconds is None:
-        await update.message.reply_text("زمان را مثل 30m یا 2h یا 1d وارد کن.")
+        await update.message.reply_text("❌ زمان را مثل 30m یا 2h یا 1d وارد کن.")
         return
-    text = " ".join(context.args[1:])
+    reminder_text = " ".join(context.args[1:]).strip()
+    if not reminder_text:
+        await update.message.reply_text("❌ متن یادآوری خالی است.")
+        return
     due = datetime.now(timezone.utc) + timedelta(seconds=seconds)
-    db("INSERT INTO reminders(chat_id,user_id,text,due_at) VALUES(?,?,?,?)",
-       (update.effective_chat.id, update.effective_user.id, text, due.isoformat()))
-    await update.message.reply_text(
-        f"⏰ یادآوری ثبت شد.\n{seconds//60 if seconds < 3600 else seconds/3600:g} "
-        f"{'دقیقه' if seconds < 3600 else 'ساعت'} دیگر."
+    db(
+        "INSERT INTO reminders(chat_id,user_id,text,due_at) VALUES(?,?,?,?)",
+        (update.effective_chat.id, update.effective_user.id, reminder_text, due.isoformat()),
     )
+    if seconds < 3600:
+        amount_text = f"{seconds // 60} دقیقه"
+    elif seconds < 86400:
+        amount_text = f"{seconds / 3600:g} ساعت"
+    else:
+        amount_text = f"{seconds / 86400:g} روز"
+    await update.message.reply_text(f"⏰ یادآوری ثبت شد.\n{amount_text} دیگر.")
+
 
 async def reminder_worker(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(timezone.utc)
     rows = db("SELECT * FROM reminders WHERE sent=0", fetch=True)
-    for r in rows:
+    for row in rows:
         try:
-            due = datetime.fromisoformat(r["due_at"])
+            due = datetime.fromisoformat(row["due_at"])
             if due <= now:
                 await context.bot.send_message(
-                    r["chat_id"],
-                    f"⏰ *YP Reminder*\n\n{r['text']}\n👤 برای: `{r['user_id']}`",
-                    
+                    row["chat_id"],
+                    f"<b>⏰ YP Reminder</b>\n\n"
+                    f"{escape(row['text'])}\n"
+                    f"👤 برای: <code>{row['user_id']}</code>",
+                    parse_mode="HTML",
                 )
-                db("UPDATE reminders SET sent=1 WHERE id=?", (r["id"],))
+                db("UPDATE reminders SET sent=1 WHERE id=?", (row["id"],))
         except Exception:
             logging.exception("Reminder error")
 
+
 async def project(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_admin(update):
-        await update.message.reply_text("⛔ فقط ادمین گروه.")
+        await update.message.reply_text("⛔ فقط ادمین گروه می‌تواند پروژه را تغییر دهد.")
         return
     name = " ".join(context.args).strip()
     if not name:
         await update.message.reply_text("فرمت: /project YP Track 001")
         return
-    db("""INSERT INTO settings(chat_id, project) VALUES(?,?)
-          ON CONFLICT(chat_id) DO UPDATE SET project=excluded.project""",
-       (update.effective_chat.id, name))
+    db(
+        """INSERT INTO settings(chat_id, project) VALUES(?,?)
+           ON CONFLICT(chat_id) DO UPDATE SET project=excluded.project""",
+        (update.effective_chat.id, name),
+    )
     await update.message.reply_text(f"✅ پروژه تغییر کرد به:\n{name}")
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if q.data == "tasks":
-        await q.message.reply_text(tasks_text(), )
-    elif q.data == "status":
-        await status(update, context)
-    elif q.data == "release":
-        await release(update, context)
-    elif q.data == "members":
-        rows = db("SELECT * FROM members ORDER BY role, name", fetch=True)
-        text = "👥 *اعضای YP*\n\n" + (
-            "\n".join(
-                f"{ROLE_NAMES.get(r['role'], r['role'])} — "
-                f"{('@'+r['username']) if r['username'] else r['name']}"
-                for r in rows
-            ) if rows else "هنوز عضوی ثبت نشده."
-        )
-        await q.message.reply_text(text, )
 
-async def error_handler(update, context):
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu":
+        await query.message.reply_text(
+            "🤖 <b>YP Team Manager Bot</b>\n\nیک گزینه را انتخاب کن:",
+            parse_mode="HTML",
+            reply_markup=menu(),
+        )
+    elif query.data == "tasks":
+        await send_html(query.message, tasks_text(), back_menu())
+    elif query.data == "status":
+        await status(update, context)
+    elif query.data == "release":
+        await release(update, context)
+    elif query.data == "members":
+        rows = db("SELECT * FROM members ORDER BY role, name", fetch=True)
+        if not rows:
+            text = "<b>👥 اعضای YP</b>\n\nهنوز عضوی ثبت نشده."
+        else:
+            lines = ["<b>👥 اعضای YP</b>", ""]
+            for row in rows:
+                tag = f"@{escape(row['username'])}" if row["username"] else escape(row["name"])
+                lines.append(f"{ROLE_NAMES.get(row['role'], escape(row['role']))} — {tag}")
+            text = "\n".join(lines)
+        await send_html(query.message, text, back_menu())
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logging.exception("Unhandled error", exc_info=context.error)
+
 
 def main():
     init_db()
@@ -355,6 +431,7 @@ def main():
 
     logging.info("🤖 YP Team Manager Bot is running...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()
